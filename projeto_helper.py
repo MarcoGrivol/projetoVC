@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from os import listdir
 from os.path import join, isfile
-from collections import OrderedDict
+from sklearn.svm import OneClassSVM
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
 from PIL import Image
@@ -32,6 +32,8 @@ class BeerClassification:
             img_with_names = self._getImagesFromFolder(join(folder_path, i))
             self.imgs.extend(img_with_names[0])
             self.labels.extend(img_with_names[1])
+        self.imgs = np.array(self.imgs)
+        self.labels = np.array(self.labels)
     
     def processGetDiff(
         self, 
@@ -61,14 +63,15 @@ class BeerClassification:
         ret = self.transform(query_img, train_img)
         train_img_t = ret[0]
         img_diff = self.imgDiff(query_img, train_img_t)
+        img_diff_trim = self.trim(img_diff)
         
         if plot:
             query_kpts = ret[1]
             train_kpts = ret[2]
             matches = ret[3]
             self._plot_imgs(query_img, train_img, query_kpts, train_kpts,
-                            matches, train_img_t, img_diff)
-        return img_diff
+                            matches, train_img_t, img_diff_trim)
+        return img_diff_trim
     
     def transform(self, query_img, train_img):
         """Uses SIFT and RANSAC to obtain a Homography matrix to match train_img
@@ -134,31 +137,53 @@ class BeerClassification:
         
         results = []
         for i, label in enumerate(self.labels):
-            rot = label.split('_')[2].split('.')[0] # [id, version, rot.jpg] -> [rot, jpg]
+            ident, version, rot = label.split('_') # [id, version, rot.jpg]
+            rot = rot.split('.')[0] # [rot, jpg]
             if rot == query_rot and i != query_idx:
                 # rotacao correta e imagem é diferente
                 img_diff = self.processGetDiff(query_img, self.getImage(self.imgs[i]))
                 t = self.thresholdSum(img_diff, threshold_value)
-                results.append([i, t])
+                results.append([t, int(ident)])
         return np.array(results)
 
-    def histCorr(self, query_img, query_idx):
+    def compareHistogramAllImages(
+        self, 
+        query_img, 
+        query_idx, 
+        query_hist,
+        hist_size=[256],
+        ranges=[0, 255]):
+
         query_label = self.labels[query_idx]
         query_rot = query_label.split('_')[2].split('.')[0]
         
         color = ('r', 'g', 'b')
         results = []
         for i, label in enumerate(self.labels):
-            rot = label.split('_')[2].split('.')[0] # [id, version, rot.jpg] -> [rot, jpg]
+            ident, version, rot = label.split('_') # [id, version, rot.jpg]
+            rot = rot.split('.')[0] # [rot, jpg]
             if rot == query_rot and i != query_idx:
                 # rotacao correta e imagem é diferente
                 img_diff = self.processGetDiff(query_img, self.getImage(self.imgs[i]))
                 img_diff_crop = self.trim(img_diff)
-                hist_corr = []
+                
+                train_hist = []
                 for j, col in enumerate(color):
-                    hist = cv2.calcHist([img_diff], [j], None, [256], [0, 255])
-                results.append(hist)
+                    train_hist.append(cv2.calcHist([img_diff_crop], [j], None, hist_size, ranges))
+
+                hist_corr = self.compareHistogram(query_hist, train_hist)
+                hist_corr.append(int(ident))
+
+                results.append(hist_corr)
+
         return np.array(results)
+
+    def compareHistogram(self, query_hist, train_hist, color=('r', 'g', 'b')):
+        hist_corr = []
+        for i, col in enumerate(color):
+            corr = cv2.compareHist(query_hist[i], train_hist[i], cv2.HISTCMP_BHATTACHARYYA)
+            hist_corr.append(corr)
+        return hist_corr
     
     def ssimAllImages(self, query_img, query_idx, threshold_value=50):
         query_label = self.labels[query_idx]
@@ -327,28 +352,62 @@ class BeerClassification:
         img_diff = cv2.subtract(imgA, imgB)
         return img_diff
     
+    def predictAndScoreSVM(self, X):
+        true_labels = X[:, -1]
+        X = X[:, :-1]
+        clf = OneClassSVM(gamma='auto').fit(X)
+        pred = clf.predict(X)
+        
+        pred_outliers = pred == 1
+        true_outliers = true_labels != 0
+        pred_x_true = pred_outliers == true_outliers
+        
+        acc = np.sum(pred_x_true) / len(pred_x_true)
+        return acc
+            
+    def predictAndScoreThreshold(self, X, threshold=50000):
+        true_labels = X[:, -1]
+        X = X[:, :-1]
+
+        pred_outliers = []
+        for value in X:
+            if value > threshold:
+                pred_outliers.append(True)
+            else:
+                pred_outliers.append(False)
+
+        true_outliers = true_labels != 0
+        pred_x_true = pred_outliers == true_outliers
+
+        acc = np.sum(pred_x_true) / len(pred_x_true)
+        return acc
+
     def getImage(self, img):
         img = plt.imread(img)
         return img
 
     def trim(self, img):
-        row, col, d = img.shape
-        # left
-        for i in range(col):
-            if np.sum(img[:, i, :]) > 0:
-                break
-        # right
-        for j in range(col - 1, 0, -1):
-            if np.sum(img[:, j, :]) > 0:
-                break
-        # up
-        for m in range(row):
-            if np.sum(img[m, :, :]) > 0:
-                break
-        # down
-        for n in range(row - 1, 0, -1):
-            if np.sum(img[n, :, :]) > 0:
-                break
+        # row, col, d = img.shape
+        # # left
+        # for i in range(col):
+        #     if np.sum(img[:, i, :]) > 0:
+        #         break
+        # # right
+        # for j in range(col - 1, 0, -1):
+        #     if np.sum(img[:, j, :]) > 0:
+        #         break
+        # # up
+        # for m in range(row):
+        #     if np.sum(img[m, :, :]) > 0:
+        #         break
+        # # down
+        # for n in range(row - 1, 0, -1):
+        #     if np.sum(img[n, :, :]) > 0:
+        #         break
+        m = 680
+        n = 2711
+        i = 872
+        j = 2095
         img_crop = img[m : n + 1, i : j + 1, :]
         return img_crop
     
