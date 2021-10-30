@@ -369,6 +369,11 @@ class BeerClassification:
         true_labels = X[:, -1]
         X = X[:, :-1]
 
+        if threshold == -1:
+            idx = (np.argmax(true_labels > 0)) // 2
+            inliers_max_value = np.max(X[:idx])
+            threshold = inliers_max_value
+
         pred_outliers = []
         for value in X:
             if value > threshold:
@@ -380,7 +385,7 @@ class BeerClassification:
         pred_x_true = pred_outliers == true_outliers
 
         acc = np.sum(pred_x_true) / len(pred_x_true)
-        return acc
+        return (acc, threshold)
 
     def getImage(self, img):
         img = plt.imread(img)
