@@ -62,7 +62,11 @@ class BeerClassification:
         """
         ret = self.transform(query_img, train_img)
         train_img_t = ret[0]
-        img_diff = self.imgDiff(query_img, train_img_t)
+        
+        query_img_s = cv2.GaussianBlur(query_img, (5, 5), cv2.BORDER_DEFAULT)
+        train_img_s = cv2.GaussianBlur(train_img_t, (5, 5), cv2.BORDER_DEFAULT)
+        img_diff = cv2.subtract(query_img_s, train_img_s)
+
         img_diff_trim = self.trim(img_diff)
         
         if plot:
@@ -73,7 +77,15 @@ class BeerClassification:
                             matches, train_img_t, img_diff_trim)
         return img_diff_trim
     
-    def transform(self, query_img, train_img):
+    def transform(
+        self, 
+        query_img, 
+        train_img, 
+        nfeatures=0,
+        nOctaveLayers=3,
+        sigma=1.6,
+        contrastThreshold=0.04,
+        edgeThreshold=10):
         """Uses SIFT and RANSAC to obtain a Homography matrix to match train_img
         label with query_img.
 
@@ -100,13 +112,19 @@ class BeerClassification:
             matches : list of cv2.matches
                 Keypoint matches.
         """
-        query_kpts, query_desc = self.sift(query_img)
-        train_kpts, train_desc = self.sift(train_img)
+        sift = cv2.SIFT_create(nfeatures=4000, nOctaveLayers=6, edgeThreshold=4, sigma=2.5)
+        query_kpts, query_desc = sift.detectAndCompute(query_img, None)
+        train_kpts, train_desc = sift.detectAndCompute(train_img, None)
         
-        matches = self.matcher(query_desc, train_desc)
+        bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+        matches = bf.match(train_desc, query_desc)
+        matches = sorted(matches, key=lambda x:x.distance)
         
         H = self.getHomography(query_kpts, train_kpts, matches)
-        train_img_t = self.warpPerspective(query_img, train_img, H)
+
+        width = query_img.shape[1]
+        height = query_img.shape[0]
+        train_img_t = cv2.warpPerspective(train_img, H, (width, height))
         return (train_img_t, query_kpts, train_kpts, matches)
     
     def thresholdAllImages(self, query_img, query_idx, threshold_value=50):
@@ -142,7 +160,9 @@ class BeerClassification:
             if rot == query_rot and i != query_idx:
                 # rotacao correta e imagem é diferente
                 img_diff = self.processGetDiff(query_img, self.getImage(self.imgs[i]))
-                t = self.thresholdSum(img_diff, threshold_value)
+                img_gray = cv2.cvtColor(img_diff, cv2.COLOR_RGB2GRAY)
+                _, img_t = cv2.threshold(img_gray, threshold_value, 1, cv2.THRESH_BINARY)
+                t = np.sum(img_t)
                 results.append([t, int(ident)])
         return np.array(results)
 
@@ -204,72 +224,11 @@ class BeerClassification:
                 results.append([i, ssim_value])
         return np.array(results)
     
-    def thresholdSum(self, img, threshold_value):
-        """Convert to gray, apply a binary threshold operation and sum the white
-        pixels.
-
-        Parameters
-        ----------
-        img : ndarray
-            RGB image.
-
-        threshold_value : int
-            Value for the binary threshold operation.
-
-        Returns
-        -------
-            np.sum(img_t) : int
-                Sum of white pixels.
-        """
-        img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        t, img_t = cv2.threshold(img_gray, threshold_value, 1, cv2.THRESH_BINARY)
-        return np.sum(img_t)
-        
-    def sift(self, img):
-        """Applies SIFT to img.
-
-        Parameters
-        ----------
-        img : ndarray
-            Image.
-
-        Returns:
-            (kpts, desc) : tuple
-                kpts : cv2.Keypoint
-                    Keypoints of the image.
-                
-                desc : ndarray
-                    Descriptos of the image.
-        """
-        s = cv2.SIFT_create()
-        kpts, desc = s.detectAndCompute(img, None)
-        return (kpts, desc)
-    
-    def matcher(self, query_desc, train_desc):
-        """Uses a brute force method to obtain the matches from the query and 
-        train images descriptos.
-
-        Parameters
-        ----------
-        query_desc : ndarray
-            Query image descriptors.
-        
-        train_desc : ndarray
-            Train image descriptors.
-
-        Returns
-        -------
-        matches : cv2.matches
-            Matched descriptors.
-        """
-        bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
-        matches = bf.match(train_desc, query_desc)
-        matches = sorted(matches, key=lambda x:x.distance)
-        return matches
-    
     def getHomography(self, query_kpts, train_kpts, matches):
         """Returns a homography matrix to transform the train image to match
         the query. 
+
+        Adapted from: https://colab.research.google.com/drive/11Md7HWh2ZV6_g3iCYSUw76VNr4HzxcX5
 
         Parameters
         ----------
@@ -301,56 +260,6 @@ class BeerClassification:
             return H
         else:
             return None
-        
-    def warpPerspective(self, query_img, train_img, H):
-        """Applies a transformation to train_img using the matrix H.
-
-        Parameters
-        ----------
-        query_img : ndarray
-            Query image used as reference for the transformation.
-
-        train_img : ndarray
-            Train image to be transformed.
-
-        H : ndarray
-            Transformation matrix.
-
-        Returns
-        -------
-        train_img_transformed : ndarray
-            Train image after geometrical transformation with H.
-        """
-        width = query_img.shape[1]
-        height = query_img.shape[0]
-        train_img_transformed = cv2.warpPerspective(train_img, H, (width, height))
-        return train_img_transformed
-    
-    def imgDiff(self, imgA, imgB, kernel=(5, 5)):
-        """Returns a image from the difference of imgA and imgB after a gaussian
-        smoothing.
-        
-        Parameters
-        ----------
-        imgA : ndarray
-            Image.
-
-        imgB : ndarray
-            Image.
-
-        kernel : tuple, optional
-            Kernel size for Gaussian Smoothing.
-
-        Returns
-        -------
-        img_diff : ndarray
-            imgA - imgB
-
-        """
-        imgA_smooth = cv2.GaussianBlur(imgA, kernel, cv2.BORDER_DEFAULT)
-        imgB_smooth = cv2.GaussianBlur(imgB, kernel, cv2.BORDER_DEFAULT)
-        img_diff = cv2.subtract(imgA, imgB)
-        return img_diff
     
     def predictAndScoreSVM(self, X):
         true_labels = X[:, -1]
