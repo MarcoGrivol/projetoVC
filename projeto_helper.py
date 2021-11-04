@@ -80,12 +80,7 @@ class BeerClassification:
     def transform(
         self, 
         query_img, 
-        train_img, 
-        nfeatures=0,
-        nOctaveLayers=3,
-        sigma=1.6,
-        contrastThreshold=0.04,
-        edgeThreshold=10):
+        train_img):
         """Uses SIFT and RANSAC to obtain a Homography matrix to match train_img
         label with query_img.
 
@@ -256,7 +251,7 @@ class BeerClassification:
             query_pts = np.float32([query_kpts[m.trainIdx] for m in matches])
 
             # estimate the homography between the sets of points
-            (H, status) = cv2.findHomography(train_pts, query_pts, cv2.RANSAC, 4)
+            (H, status) = cv2.findHomography(train_pts, query_pts, cv2.RANSAC, 3)
             return H
         else:
             return None
@@ -264,7 +259,8 @@ class BeerClassification:
     def predictAndScoreSVM(self, X):
         true_labels = X[:, -1]
         X = X[:, :-1]
-        clf = OneClassSVM(gamma='auto').fit(X)
+        # clf = OneClassSVM(gamma='auto').fit(X)
+        clf = OneClassSVM(kernel='linear').fit(X)
         pred = clf.predict(X)
         
         pred_outliers = pred == 1
