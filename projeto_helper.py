@@ -1,4 +1,5 @@
 import cv2
+import sys
 import numpy as np
 from os import listdir
 from os.path import join, isfile
@@ -34,6 +35,46 @@ class BeerClassification:
             self.labels.extend(img_with_names[1])
         self.imgs = np.array(self.imgs)
         self.labels = np.array(self.labels)
+
+    def processGetDiffAllImages(
+        self,
+        query_imgs,
+        query_idxs,
+        folder_path=''):
+
+        query_img_0 = query_imgs[0]
+        query_img_45L = query_imgs[1]
+        query_img_45R = query_imgs[2]
+
+        fig, axs = plt.subplots(1, 3)
+        axs[0].imshow(query_img_0)
+        axs[1].imshow(query_img_45L)
+        axs[2].imshow(query_img_45R)
+        plt.show()
+
+        labels = np.delete(self.labels, query_idxs)
+        color = ('r', 'g', 'b')
+        for i, label in enumerate(labels):
+            i += 3
+            ident, version, rot = label.split('_') # [id, version, rot.jpg]
+            rot = rot.split('.')[0] # [rot, jpg]
+
+            train_img = plt.imread(self.imgs[i])
+            if rot == '0':
+                img_diff = self.processGetDiff(query_img_0, train_img)
+            elif rot == '45L':
+                img_diff = self.processGetDiff(query_img_45L, train_img)
+                pass
+            elif rot == '45R':
+                img_diff = self.processGetDiff(query_img_45R, train_img)
+                pass
+            else:
+                sys.exit(f'Unknow rotation ({rot}) in idx: {i}. Label: {label}')
+            
+            img_diff_label = f'{ident}_DIFF{version}_{rot}.jpg'
+            self._saveImage(img_diff, join(folder_path, img_diff_label))
+            print(img_diff_label, end=' ')
+
     
     def processGetDiff(
         self, 
@@ -122,7 +163,7 @@ class BeerClassification:
         train_img_t = cv2.warpPerspective(train_img, H, (width, height))
         return (train_img_t, query_kpts, train_kpts, matches)
     
-    def thresholdAllImages(self, query_img, query_idx, threshold_value=50):
+    def thresholdAllImages(self, imgs_diff_folder, desired_rot=None, threshold_value=50):
         """Apply a binary threshold to all images using query_img as reference and
         returns the sum of white pixels from each image.
 
@@ -145,52 +186,43 @@ class BeerClassification:
             of white pixels after the threshold operation.
 
         """
-        query_label = self.labels[query_idx]
-        query_rot = query_label.split('_')[2].split('.')[0]
-        
+        imgs, labels = self._getImagesFromFolder(imgs_diff_folder)
         results = []
-        for i, label in enumerate(self.labels):
-            ident, version, rot = label.split('_') # [id, version, rot.jpg]
+        for i, img in enumerate(imgs):
+            ident, _, rot = labels[i].split('_') # [id, version, rot.jpg]
             rot = rot.split('.')[0] # [rot, jpg]
-            if rot == query_rot and i != query_idx:
-                # rotacao correta e imagem é diferente
-                img_diff = self.processGetDiff(query_img, self.getImage(self.imgs[i]))
-                img_gray = cv2.cvtColor(img_diff, cv2.COLOR_RGB2GRAY)
-                _, img_t = cv2.threshold(img_gray, threshold_value, 1, cv2.THRESH_BINARY)
-                t = np.sum(img_t)
+            if desired_rot == None or rot == desired_rot:
+                img_diff = plt.imread(img)
+                img_diff_gray = cv2.cvtColor(img_diff, cv2.COLOR_RGB2GRAY)
+                _, img_diff_t = cv2.threshold(img_diff_gray, threshold_value, 1, cv2.THRESH_BINARY)
+
+                t = np.sum(img_diff_t)
                 results.append([t, int(ident)])
         return np.array(results)
 
     def compareHistogramAllImages(
-        self, 
-        query_img, 
-        query_idx, 
+        self,
         query_hist,
+        imgs_diff_folder,
+        desired_rot=None,
         hist_size=[256],
         ranges=[0, 255]):
 
-        query_label = self.labels[query_idx]
-        query_rot = query_label.split('_')[2].split('.')[0]
-        
-        color = ('r', 'g', 'b')
+        imgs, labels = self._getImagesFromFolder(imgs_diff_folder)
         results = []
-        for i, label in enumerate(self.labels):
-            ident, version, rot = label.split('_') # [id, version, rot.jpg]
+        for i, img in enumerate(imgs):
+            ident, _, rot = labels[i].split('_') # [id, version, rot.jpg]
             rot = rot.split('.')[0] # [rot, jpg]
-            if rot == query_rot and i != query_idx:
-                # rotacao correta e imagem é diferente
-                img_diff = self.processGetDiff(query_img, self.getImage(self.imgs[i]))
-                img_diff_crop = self.trim(img_diff)
+            if desired_rot == None or rot == desired_rot:
+                img_diff = plt.imread(img)
                 
                 train_hist = []
-                for j, col in enumerate(color):
-                    train_hist.append(cv2.calcHist([img_diff_crop], [j], None, hist_size, ranges))
-
+                for j in range(3):
+                    train_hist.append(cv2.calcHist([img_diff], [j], None, hist_size, ranges))
+                
                 hist_corr = self.compareHistogram(query_hist, train_hist)
                 hist_corr.append(int(ident))
-
                 results.append(hist_corr)
-
         return np.array(results)
 
     def compareHistogram(self, query_hist, train_hist, color=('r', 'g', 'b')):
@@ -209,7 +241,7 @@ class BeerClassification:
             rot = label.split('_')[2].split('.')[0]
             if rot == query_rot and i != query_idx:
                 # rotacao correta e imagem é diferente
-                img_diff = self.processGetDiff(query_img, self.getImage(self.imgs[i]))
+                img_diff = self.processGetDiff(query_img, plt.imread(self.imgs[i]))
                 
                 img_diff_gray = cv2.cvtColor(img_diff, cv2.COLOR_RGB2GRAY)
                 query_img_gray = cv2.cvtColor(query_img, cv2.COLOR_RGB2GRAY)
@@ -260,7 +292,7 @@ class BeerClassification:
         true_labels = X[:, -1]
         X = X[:, :-1]
         # clf = OneClassSVM(gamma='auto').fit(X)
-        clf = OneClassSVM(kernel='linear').fit(X)
+        clf = OneClassSVM().fit(X)
         pred = clf.predict(X)
         
         pred_outliers = pred == 1
@@ -270,17 +302,17 @@ class BeerClassification:
         acc = np.sum(pred_x_true) / len(pred_x_true)
         return acc
             
-    def predictAndScoreThreshold(self, X, threshold=50000):
-        true_labels = X[:, -1]
-        X = X[:, :-1]
+    def predictAndScoreThreshold(self, X):
+        idx = 20
+        X_fit = X[:idx, 0]
+        X_test = X[idx:, 0]
+        true_labels = X[idx:, 1]
 
-        if threshold == -1:
-            idx = (np.argmax(true_labels > 0)) // 2
-            inliers_max_value = np.max(X[:idx])
-            threshold = inliers_max_value
+        inliers_max_value = np.max(X_fit)
+        threshold = inliers_max_value
 
         pred_outliers = []
-        for value in X:
+        for value in X_test:
             if value > threshold:
                 pred_outliers.append(True)
             else:
@@ -291,10 +323,6 @@ class BeerClassification:
 
         acc = np.sum(pred_x_true) / len(pred_x_true)
         return (acc, threshold)
-
-    def getImage(self, img):
-        img = plt.imread(img)
-        return img
 
     def trim(self, img):
         # row, col, d = img.shape
