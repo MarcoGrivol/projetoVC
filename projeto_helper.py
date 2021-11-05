@@ -40,7 +40,11 @@ class BeerClassification:
         self,
         query_imgs,
         query_idxs,
-        folder_path=''):
+        folder_path='',
+        nfeatures=0,
+        nOctaveLayers=3,
+        edgeThreshold=10,
+        sigma=1.6):
 
         query_img_0 = query_imgs[0]
         query_img_45L = query_imgs[1]
@@ -61,12 +65,15 @@ class BeerClassification:
 
             train_img = plt.imread(self.imgs[i])
             if rot == '0':
-                img_diff = self.processGetDiff(query_img_0, train_img)
+                img_diff = self.processGetDiff(query_img_0, train_img,
+                    nfeatures, nOctaveLayers, edgeThreshold, sigma)
             elif rot == '45L':
-                img_diff = self.processGetDiff(query_img_45L, train_img)
+                img_diff = self.processGetDiff(query_img_45L, train_img,
+                    nfeatures, nOctaveLayers, edgeThreshold, sigma)
                 pass
             elif rot == '45R':
-                img_diff = self.processGetDiff(query_img_45R, train_img)
+                img_diff = self.processGetDiff(query_img_45R, train_img,
+                    nfeatures, nOctaveLayers, edgeThreshold, sigma)
                 pass
             else:
                 sys.exit(f'Unknow rotation ({rot}) in idx: {i}. Label: {label}')
@@ -80,7 +87,11 @@ class BeerClassification:
         self, 
         query_img, 
         train_img, 
-        plot=False):
+        plot=False,
+        nfeatures=0,
+        nOctaveLayers=3,
+        edgeThreshold=10,
+        sigma=1.6):
         """Uses SIFT and RANSAC to obtain a transformation for the train_img
         and returns the difference between both images.
 
@@ -101,7 +112,7 @@ class BeerClassification:
         img_diff : ndarray
             Bitwise difference of query and train images. 
         """
-        ret = self.transform(query_img, train_img)
+        ret = self.transform(query_img, train_img, nfeatures, nOctaveLayers, edgeThreshold, sigma)
         train_img_t = ret[0]
         
         query_img_s = cv2.GaussianBlur(query_img, (5, 5), cv2.BORDER_DEFAULT)
@@ -121,7 +132,11 @@ class BeerClassification:
     def transform(
         self, 
         query_img, 
-        train_img):
+        train_img,
+        nfeatures=0,
+        nOctaveLayers=3,
+        edgeThreshold=10,
+        sigma=1.6):
         """Uses SIFT and RANSAC to obtain a Homography matrix to match train_img
         label with query_img.
 
@@ -148,7 +163,11 @@ class BeerClassification:
             matches : list of cv2.matches
                 Keypoint matches.
         """
-        sift = cv2.SIFT_create(nfeatures=4000, nOctaveLayers=6, edgeThreshold=4, sigma=2.5)
+        sift = cv2.SIFT_create(
+            nfeatures=nfeatures, 
+            nOctaveLayers=nOctaveLayers, 
+            edgeThreshold=edgeThreshold, 
+            sigma=sigma)
         query_kpts, query_desc = sift.detectAndCompute(query_img, None)
         train_kpts, train_desc = sift.detectAndCompute(train_img, None)
         
@@ -217,20 +236,15 @@ class BeerClassification:
                 img_diff = plt.imread(img)
                 
                 train_hist = []
+                hist_corr = []
                 for j in range(3):
                     train_hist.append(cv2.calcHist([img_diff], [j], None, hist_size, ranges))
+                    corr = cv2.compareHist(query_hist[j], train_hist[j], cv2.HISTCMP_BHATTACHARYYA)
+                    hist_corr.append(corr)
                 
-                hist_corr = self.compareHistogram(query_hist, train_hist)
                 hist_corr.append(int(ident))
                 results.append(hist_corr)
         return np.array(results)
-
-    def compareHistogram(self, query_hist, train_hist, color=('r', 'g', 'b')):
-        hist_corr = []
-        for i, col in enumerate(color):
-            corr = cv2.compareHist(query_hist[i], train_hist[i], cv2.HISTCMP_BHATTACHARYYA)
-            hist_corr.append(corr)
-        return hist_corr
     
     def ssimAllImages(self, query_img, query_idx, threshold_value=50):
         query_label = self.labels[query_idx]
@@ -291,7 +305,6 @@ class BeerClassification:
     def predictAndScoreSVM(self, X):
         true_labels = X[:, -1]
         X = X[:, :-1]
-        # clf = OneClassSVM(gamma='auto').fit(X)
         clf = OneClassSVM().fit(X)
         pred = clf.predict(X)
         

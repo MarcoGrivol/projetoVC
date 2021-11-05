@@ -2,5 +2,7 @@
 .vscode
 __pycache__
 imgs_diff
+imgs_diff2
 temp
 Tests\.ipynb_checkpoints
+
