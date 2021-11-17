@@ -86,6 +86,7 @@ class BeerClassification:
     def processGetDiff(
         self, 
         query_img, 
+        query_img_mask,
         train_img, 
         plot=False,
         nfeatures=0,
@@ -112,12 +113,15 @@ class BeerClassification:
         img_diff : ndarray
             Bitwise difference of query and train images. 
         """
+        query_img = cv2.GaussianBlur(query_img, (9, 9), cv2.BORDER_DEFAULT)
+        train_img = cv2.GaussianBlur(train_img, (9, 9), cv2.BORDER_DEFAULT)
         ret = self.transform(query_img, train_img, nfeatures, nOctaveLayers, edgeThreshold, sigma)
         train_img_t = ret[0]
+        train_img_t = cv2.bitwise_and(train_img_t, query_img_mask)
         
-        query_img_s = cv2.GaussianBlur(query_img, (5, 5), cv2.BORDER_DEFAULT)
-        train_img_s = cv2.GaussianBlur(train_img_t, (5, 5), cv2.BORDER_DEFAULT)
-        img_diff = cv2.subtract(query_img_s, train_img_s)
+        # query_img_s = cv2.GaussianBlur(query_img, (5, 5), cv2.BORDER_DEFAULT)
+        # train_img_s = cv2.GaussianBlur(train_img_t, (5, 5), cv2.BORDER_DEFAULT)
+        img_diff = cv2.subtract(train_img_t, query_img)
 
         img_diff_trim = self.trim(img_diff)
         
@@ -383,10 +387,10 @@ class BeerClassification:
         # draw keypoints
         axs[1, 0].imshow(cv2.drawKeypoints(query_img, query_kpts,
                                            None, color=(0, 255, 0)))
-        axs[1, 0].set_title('Query img Keypoints')
+        axs[1, 0].set_title(f'Query img Keypoints {len(query_kpts)}')
         axs[1, 1].imshow(cv2.drawKeypoints(train_img, train_kpts, 
                                            None, color=(0, 255, 0)))
-        axs[1, 1].set_title('Train img Keypoints')
+        axs[1, 1].set_title(f'Train img Keypoints {len(train_kpts)}')
         # draw matches
         gs = axs[2, 0].get_gridspec()
         axs[2, 0].remove()
