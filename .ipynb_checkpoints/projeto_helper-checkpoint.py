@@ -41,10 +41,10 @@ class BeerClassification:
         query_imgs,
         query_idxs,
         folder_path='',
-        nfeatures=0,
-        nOctaveLayers=3,
-        edgeThreshold=10,
-        sigma=1.6):
+        nfeatures=4000, 
+        nOctaveLayers=6, 
+        edgeThreshold=4, 
+        sigma=2.5):
 
         query_img_0 = query_imgs[0]
         query_img_45L = query_imgs[1]
@@ -81,7 +81,6 @@ class BeerClassification:
             img_diff_label = f'{ident}_DIFF{version}_{rot}.jpg'
             self._saveImage(img_diff, join(folder_path, img_diff_label))
             print(img_diff_label, end=' ')
-
     
     def processGetDiff(
         self, 
@@ -89,10 +88,10 @@ class BeerClassification:
         query_img_mask,
         train_img, 
         plot=False,
-        nfeatures=0,
-        nOctaveLayers=3,
-        edgeThreshold=10,
-        sigma=1.6):
+        nfeatures=4000, 
+        nOctaveLayers=6, 
+        edgeThreshold=4, 
+        sigma=2.5):
         """Uses SIFT and RANSAC to obtain a transformation for the train_img
         and returns the difference between both images.
 
@@ -113,16 +112,15 @@ class BeerClassification:
         img_diff : ndarray
             Bitwise difference of query and train images. 
         """
-        query_img = cv2.GaussianBlur(query_img, (9, 9), cv2.BORDER_DEFAULT)
-        train_img = cv2.GaussianBlur(train_img, (9, 9), cv2.BORDER_DEFAULT)
-        ret = self.transform(query_img, train_img, nfeatures, nOctaveLayers, edgeThreshold, sigma)
+        query_img_s = cv2.GaussianBlur(query_img, (9, 9), cv2.BORDER_DEFAULT)
+        train_img_s = cv2.GaussianBlur(train_img, (9, 9), cv2.BORDER_DEFAULT)
+        ret = self.transform(query_img_s, train_img_s, nfeatures, nOctaveLayers, edgeThreshold, sigma)
         train_img_t = ret[0]
         train_img_t = cv2.bitwise_and(train_img_t, query_img_mask)
         
         # query_img_s = cv2.GaussianBlur(query_img, (5, 5), cv2.BORDER_DEFAULT)
         # train_img_s = cv2.GaussianBlur(train_img_t, (5, 5), cv2.BORDER_DEFAULT)
-        img_diff = cv2.subtract(train_img_t, query_img)
-
+        img_diff = cv2.subtract(train_img_t, query_img_s)
         img_diff_trim = self.trim(img_diff)
         
         if plot:
@@ -137,10 +135,10 @@ class BeerClassification:
         self, 
         query_img, 
         train_img,
-        nfeatures=0,
-        nOctaveLayers=3,
-        edgeThreshold=10,
-        sigma=1.6):
+        nfeatures=4000, 
+        nOctaveLayers=6, 
+        edgeThreshold=4, 
+        sigma=2.5):
         """Uses SIFT and RANSAC to obtain a Homography matrix to match train_img
         label with query_img.
 
