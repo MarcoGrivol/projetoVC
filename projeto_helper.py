@@ -40,7 +40,9 @@ class BeerClassification:
         self,
         query_imgs,
         query_idxs,
+        masks,
         folder_path='',
+        kernel=(9, 9),
         nfeatures=4000, 
         nOctaveLayers=6, 
         edgeThreshold=4, 
@@ -49,6 +51,10 @@ class BeerClassification:
         query_img_0 = query_imgs[0]
         query_img_45L = query_imgs[1]
         query_img_45R = query_imgs[2]
+
+        mask_0 = masks[0]
+        mask_45L = masks[1]
+        mask_45R = masks[2]
 
         fig, axs = plt.subplots(1, 3)
         axs[0].imshow(query_img_0)
@@ -65,15 +71,15 @@ class BeerClassification:
 
             train_img = plt.imread(self.imgs[i])
             if rot == '0':
-                img_diff = self.processGetDiff(query_img_0, train_img,
-                    nfeatures, nOctaveLayers, edgeThreshold, sigma)
+                img_diff = self.processGetDiff(query_img_0, mask_0, train_img, False,
+                    kernel, nfeatures, nOctaveLayers, edgeThreshold, sigma)
             elif rot == '45L':
-                img_diff = self.processGetDiff(query_img_45L, train_img,
-                    nfeatures, nOctaveLayers, edgeThreshold, sigma)
+                img_diff = self.processGetDiff(query_img_45L, mask_45L, train_img, False,
+                    kernel, nfeatures, nOctaveLayers, edgeThreshold, sigma)
                 pass
             elif rot == '45R':
-                img_diff = self.processGetDiff(query_img_45R, train_img,
-                    nfeatures, nOctaveLayers, edgeThreshold, sigma)
+                img_diff = self.processGetDiff(query_img_45R, mask_45R, train_img, False,
+                    kernel, nfeatures, nOctaveLayers, edgeThreshold, sigma)
                 pass
             else:
                 sys.exit(f'Unknow rotation ({rot}) in idx: {i}. Label: {label}')
@@ -117,8 +123,6 @@ class BeerClassification:
         train_img_t = ret[0]
         train_img_t = cv2.bitwise_and(train_img_t, query_img_mask)
         
-        # query_img_s = cv2.GaussianBlur(query_img, (5, 5), cv2.BORDER_DEFAULT)
-        # train_img_s = cv2.GaussianBlur(train_img_t, (5, 5), cv2.BORDER_DEFAULT)
         img_diff = cv2.subtract(train_img_t, query_img)
         img_diff_trim = self.trim(img_diff)
         
@@ -230,11 +234,17 @@ class BeerClassification:
 
     def compareHistogramAllImages(
         self,
-        query_hist,
+        query_img_diff,
         imgs_diff_folder,
         desired_rot=None,
         hist_size=[256],
         ranges=[0, 255]):
+
+        query_hist_rgb = []
+        for i in range(3):
+            query_hist_rgb.append(cv2.calcHist([query_img_diff], [i], None, hist_size, ranges))
+        query_img_diff_gray = cv2.cvtColor(query_img_diff, cv2.COLOR_RGB2GRAY)
+        query_hist_gray = cv2.calcHist([query_img_diff_gray], [0], None, hist_size, ranges)
 
         imgs, labels = self._getImagesFromFolder(imgs_diff_folder)
         results = []
@@ -244,34 +254,26 @@ class BeerClassification:
             if desired_rot == None or rot == desired_rot:
                 img_diff = plt.imread(img)
                 
-                train_hist = []
-                hist_corr = []
+                train_hist_rgb = []
+                hist_corr_rgb = []
                 for j in range(3):
-                    train_hist.append(cv2.calcHist([img_diff], [j], None, hist_size, ranges))
-                    corr = cv2.compareHist(query_hist[j], train_hist[j], cv2.HISTCMP_BHATTACHARYYA)
-                    hist_corr.append(corr)
-                
-                hist_corr.append(int(ident))
-                results.append(hist_corr)
-        return np.array(results)
-    
-    def ssimAllImages(self, query_img, query_idx, threshold_value=50):
-        query_label = self.labels[query_idx]
-        query_rot = query_label.split('_')[2].split('.')[0]
-        
-        results = []
-        for i, label in enumerate(self.labels):
-            rot = label.split('_')[2].split('.')[0]
-            if rot == query_rot and i != query_idx:
-                # rotacao correta e imagem é diferente
-                img_diff = self.processGetDiff(query_img, plt.imread(self.imgs[i]))
-                
+                    train_hist_rgb.append(cv2.calcHist([img_diff], [j], None, hist_size, ranges))
+                    corr_rgb = cv2.compareHist(query_hist_rgb[j], train_hist_rgb[j], cv2.HISTCMP_BHATTACHARYYA)
+                    hist_corr_rgb.append(corr_rgb)
+
                 img_diff_gray = cv2.cvtColor(img_diff, cv2.COLOR_RGB2GRAY)
-                query_img_gray = cv2.cvtColor(query_img, cv2.COLOR_RGB2GRAY)
-                _, img_t = cv2.threshold(img_diff_gray, threshold_value, 1, cv2.THRESH_BINARY)
+                train_hist_gray = cv2.calcHist([img_diff_gray], [0], None, hist_size, ranges)
+                hist_corr_gray = cv2.compareHist(query_hist_gray, train_hist_gray, cv2.HISTCMP_BHATTACHARYYA)
+
+                _, img_diff_t = cv2.threshold(img_diff_gray, 50, 1, cv2.THRESH_BINARY)
+                t_value = np.sum(img_diff_t)
                 
-                ssim_value = ssim(query_img_gray, img_t, data_range=img_t.max() - img_t.min())
-                results.append([i, ssim_value])
+                results.append([
+                    int(ident), 
+                    hist_corr_rgb, 
+                    hist_corr_gray,
+                    t_value
+                ])
         return np.array(results)
     
     def getHomography(self, query_kpts, train_kpts, matches):
@@ -347,27 +349,23 @@ class BeerClassification:
         return (acc, threshold)
 
     def trim(self, img):
-        # row, col, d = img.shape
-        # # left
-        # for i in range(col):
-        #     if np.sum(img[:, i, :]) > 0:
-        #         break
-        # # right
-        # for j in range(col - 1, 0, -1):
-        #     if np.sum(img[:, j, :]) > 0:
-        #         break
-        # # up
-        # for m in range(row):
-        #     if np.sum(img[m, :, :]) > 0:
-        #         break
-        # # down
-        # for n in range(row - 1, 0, -1):
-        #     if np.sum(img[n, :, :]) > 0:
-        #         break
-        m = 680
-        n = 2711
-        i = 872
-        j = 2095
+        row, col, d = img.shape
+        # left
+        for i in range(col):
+            if np.sum(img[:, i, :]) > 0:
+                break
+        # right
+        for j in range(col - 1, 0, -1):
+            if np.sum(img[:, j, :]) > 0:
+                break
+        # up
+        for m in range(row):
+            if np.sum(img[m, :, :]) > 0:
+                break
+        # down
+        for n in range(row - 1, 0, -1):
+            if np.sum(img[n, :, :]) > 0:
+                break
         img_crop = img[m : n + 1, i : j + 1, :]
         return img_crop
     
