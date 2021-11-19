@@ -29,6 +29,7 @@ class BeerClassification:
         """
         self.imgs = []
         self.labels = []
+        self.ids = ids
         for i in ids:
             img_with_names = self._getImagesFromFolder(join(folder_path, i))
             self.imgs.extend(img_with_names[0])
@@ -234,24 +235,19 @@ class BeerClassification:
 
     def compareHistogramAllImages(
         self,
-        query_img_diff,
+        query_hist_rgb,
+        query_hist_gray,
         imgs_diff_folder,
         desired_rot=None,
         hist_size=[256],
         ranges=[0, 255]):
-
-        query_hist_rgb = []
-        for i in range(3):
-            query_hist_rgb.append(cv2.calcHist([query_img_diff], [i], None, hist_size, ranges))
-        query_img_diff_gray = cv2.cvtColor(query_img_diff, cv2.COLOR_RGB2GRAY)
-        query_hist_gray = cv2.calcHist([query_img_diff_gray], [0], None, hist_size, ranges)
 
         imgs, labels = self._getImagesFromFolder(imgs_diff_folder)
         results = []
         for i, img in enumerate(imgs):
             ident, _, rot = labels[i].split('_') # [id, version, rot.jpg]
             rot = rot.split('.')[0] # [rot, jpg]
-            if desired_rot == None or rot == desired_rot:
+            if ident in self.ids and (desired_rot == None or rot == desired_rot):
                 img_diff = plt.imread(img)
                 
                 train_hist_rgb = []
@@ -270,11 +266,13 @@ class BeerClassification:
                 
                 results.append([
                     int(ident), 
-                    hist_corr_rgb, 
+                    *hist_corr_rgb, 
                     hist_corr_gray,
                     t_value
                 ])
-        return np.array(results)
+        results = np.array(results)
+        results[:, -1] /= np.max(results[:, -1])
+        return results
     
     def getHomography(self, query_kpts, train_kpts, matches):
         """Returns a homography matrix to transform the train image to match
