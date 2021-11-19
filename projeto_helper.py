@@ -50,23 +50,22 @@ class BeerClassification:
         sigma=2.5):
 
         query_img_0 = query_imgs[0]
-        query_img_45L = query_imgs[1]
-        query_img_45R = query_imgs[2]
+        # query_img_45L = query_imgs[1]
+        # query_img_45R = query_imgs[2]
 
         mask_0 = masks[0]
-        mask_45L = masks[1]
-        mask_45R = masks[2]
+        # mask_45L = masks[1]
+        # mask_45R = masks[2]
 
         fig, axs = plt.subplots(1, 3)
         axs[0].imshow(query_img_0)
-        axs[1].imshow(query_img_45L)
-        axs[2].imshow(query_img_45R)
+        # axs[1].imshow(query_img_45L)
+        # axs[2].imshow(query_img_45R)
         plt.show()
 
         labels = np.delete(self.labels, query_idxs)
         color = ('r', 'g', 'b')
         for i, label in enumerate(labels):
-            i += 3
             ident, version, rot = label.split('_') # [id, version, rot.jpg]
             rot = rot.split('.')[0] # [rot, jpg]
 
