@@ -3,9 +3,10 @@ import sys
 import numpy as np
 from os import listdir
 from os.path import join, isfile
+from numpy.random import triangular
 from sklearn.svm import OneClassSVM
+from sklearn.ensemble import IsolationForest
 import matplotlib.pyplot as plt
-from skimage.metrics import structural_similarity as ssim
 from PIL import Image
 
 class BeerClassification:
@@ -49,44 +50,27 @@ class BeerClassification:
         edgeThreshold=4, 
         sigma=2.5):
 
-        query_img_0 = query_imgs[0]
-        # query_img_45L = query_imgs[1]
-        # query_img_45R = query_imgs[2]
-
-        mask_0 = masks[0]
-        # mask_45L = masks[1]
-        # mask_45R = masks[2]
-
-        fig, axs = plt.subplots(1, 3)
-        axs[0].imshow(query_img_0)
-        # axs[1].imshow(query_img_45L)
-        # axs[2].imshow(query_img_45R)
-        plt.show()
-
         labels = np.delete(self.labels, query_idxs)
-        color = ('r', 'g', 'b')
+        imgs = np.delete(self.imgs, query_idxs)
         for i, label in enumerate(labels):
             ident, version, rot = label.split('_') # [id, version, rot.jpg]
             rot = rot.split('.')[0] # [rot, jpg]
 
-            train_img = plt.imread(self.imgs[i])
+            train_img = plt.imread(imgs[i])
             if rot == '0':
-                img_diff = self.processGetDiff(query_img_0, mask_0, train_img, False,
+                img_diff = self.processGetDiff(query_imgs[0], masks[0], train_img, False,
                     kernel, nfeatures, nOctaveLayers, edgeThreshold, sigma)
             elif rot == '45L':
-                img_diff = self.processGetDiff(query_img_45L, mask_45L, train_img, False,
+                img_diff = self.processGetDiff(query_imgs[1], masks[1], train_img, False,
                     kernel, nfeatures, nOctaveLayers, edgeThreshold, sigma)
-                pass
             elif rot == '45R':
-                img_diff = self.processGetDiff(query_img_45R, mask_45R, train_img, False,
+                img_diff = self.processGetDiff(query_imgs[2], masks[2], train_img, False,
                     kernel, nfeatures, nOctaveLayers, edgeThreshold, sigma)
-                pass
             else:
                 sys.exit(f'Unknow rotation ({rot}) in idx: {i}. Label: {label}')
             
             img_diff_label = f'{ident}_DIFF{version}_{rot}.jpg'
             self._saveImage(img_diff, join(folder_path, img_diff_label))
-            print(img_diff_label, end=' ')
     
     def processGetDiff(
         self, 
@@ -122,8 +106,11 @@ class BeerClassification:
         ret = self.transform(query_img, train_img, kernel, nfeatures, nOctaveLayers, edgeThreshold, sigma)
         train_img_t = ret[0]
         train_img_t = cv2.bitwise_and(train_img_t, query_img_mask)
+
+        query_img_s = cv2.GaussianBlur(query_img, kernel, cv2.BORDER_DEFAULT)
+        train_img_s = cv2.GaussianBlur(train_img_t, kernel, cv2.BORDER_DEFAULT)
         
-        img_diff = cv2.subtract(train_img_t, query_img)
+        img_diff = cv2.subtract(train_img_s, query_img_s)
         img_diff_trim = self.trim(img_diff)
         
         if plot:
@@ -195,7 +182,15 @@ class BeerClassification:
         train_img_t = cv2.warpPerspective(train_img, H, (width, height))
         return (train_img_t, query_kpts, train_kpts, matches)
     
-    def thresholdAllImages(self, imgs_diff_folder, desired_rot=None, threshold_value=50):
+    def thresholdAllImages(
+        self,
+        model,
+        train_folder,
+        test_folder,
+        test_ids=None,
+        T=50,
+        verbose=True
+    ):
         """Apply a binary threshold to all images using query_img as reference and
         returns the sum of white pixels from each image.
 
@@ -218,60 +213,128 @@ class BeerClassification:
             of white pixels after the threshold operation.
 
         """
-        imgs, labels = self._getImagesFromFolder(imgs_diff_folder)
-        results = []
-        for i, img in enumerate(imgs):
-            ident, _, rot = labels[i].split('_') # [id, version, rot.jpg]
-            rot = rot.split('.')[0] # [rot, jpg]
-            if desired_rot == None or rot == desired_rot:
-                img_diff = plt.imread(img)
-                img_diff_gray = cv2.cvtColor(img_diff, cv2.COLOR_RGB2GRAY)
-                _, img_diff_t = cv2.threshold(img_diff_gray, threshold_value, 1, cv2.THRESH_BINARY)
 
-                t = np.sum(img_diff_t)
-                results.append([t, int(ident)])
-        return np.array(results)
+        train_imgs, train_labels = self._getImagesFromFolder(train_folder)
+        true_train_labels = []
+        train_t_sum = []
+        for i, img in enumerate(train_imgs):
+            img = plt.imread(img)
+            img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            _, img_t = cv2.threshold(img_gray, T, 1, cv2.THRESH_BINARY)
+            train_t_sum.append(np.sum(img_t))
+
+            ident = train_labels[i].split('_')[0] # id_version_rot.jpg
+            if ident == '0':
+                true_train_labels.append(1)
+            else:
+                true_train_labels.append(-1)
+
+        max_t = np.max([np.max(train_t_sum), 1])
+        train_t_sum = train_t_sum / max_t
+
+        test_imgs, test_labels = self._getImagesFromFolder(test_folder)
+        true_test_labels = []
+        test_t_sum = []
+        for i, img in enumerate(test_imgs):
+            ident = test_labels[i].split('_')[0] # id_version_rot.jpg
+            if test_ids != None and ident not in test_ids:
+                continue
+            img = plt.imread(img)
+            img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            _, img_t = cv2.threshold(img_gray, T, 1, cv2.THRESH_BINARY)
+            test_t_sum.append(np.sum(img_t))
+
+            if ident == '0':
+                true_test_labels.append(1)
+            else:
+                true_test_labels.append(-1)
+
+        max_t = np.max([np.max(test_t_sum), 1])
+        test_t_sum = test_t_sum / max_t
+
+        train_t_sum = np.array(train_t_sum).reshape((len(train_t_sum), 1))
+        test_t_sum = np.array(test_t_sum).reshape((len(test_t_sum), 1))
+
+        model.fit(train_t_sum)
+
+        train_pred = model.predict(train_t_sum)
+        train_error = np.sum(train_pred != true_train_labels)
+        train_acc = 1.0 - train_error / len(train_t_sum)
+
+        test_pred = model.predict(test_t_sum)
+        test_error = np.sum(test_pred != true_test_labels)
+        test_acc = 1.0 - test_error / len(test_t_sum)
+
+        if verbose:
+            print('Train ->', end='')
+            print(f'    Error: {train_error}/{len(train_t_sum)} | {train_error / len(train_t_sum):.3f}', end='')
+            print(f'    Acuracy: {train_acc:.3f}')
+            print('Test -> ', end='')
+            print(f'    Error: {test_error}/{len(test_t_sum)} | {test_error / len(test_t_sum):.3f}', end='')
+            print(f'    Acuracy: {test_acc:.3f}')
+        return train_pred, test_pred
 
     def compareHistogramAllImages(
         self,
-        query_hist_rgb,
-        query_hist_gray,
-        imgs_diff_folder,
-        desired_rot=None,
-        hist_size=[256],
-        ranges=[0, 255]):
+        model,
+        train_folder,
+        test_folder,
+        test_ids=None,
+        bins=[10, 10, 10],
+        ranges=[10, 100, 10, 100, 10, 100],
+        verbose=True
+    ):
 
-        imgs, labels = self._getImagesFromFolder(imgs_diff_folder)
-        results = []
-        for i, img in enumerate(imgs):
-            ident, _, rot = labels[i].split('_') # [id, version, rot.jpg]
-            rot = rot.split('.')[0] # [rot, jpg]
-            if ident in self.ids and (desired_rot == None or rot == desired_rot):
-                img_diff = plt.imread(img)
-                
-                train_hist_rgb = []
-                hist_corr_rgb = []
-                for j in range(3):
-                    train_hist_rgb.append(cv2.calcHist([img_diff], [j], None, hist_size, ranges))
-                    corr_rgb = cv2.compareHist(query_hist_rgb[j], train_hist_rgb[j], cv2.HISTCMP_BHATTACHARYYA)
-                    hist_corr_rgb.append(corr_rgb)
+        train_imgs, train_labels = self._getImagesFromFolder(train_folder)
+        train_histograms = []
+        true_train_labels = []
+        for i, img in enumerate(train_imgs):
+            img = plt.imread(img)
+            hist = cv2.calcHist([img], [0, 1, 2], None, bins, ranges)
+            hist = cv2.normalize(hist, hist).flatten()
+            train_histograms.append(hist)
 
-                img_diff_gray = cv2.cvtColor(img_diff, cv2.COLOR_RGB2GRAY)
-                train_hist_gray = cv2.calcHist([img_diff_gray], [0], None, hist_size, ranges)
-                hist_corr_gray = cv2.compareHist(query_hist_gray, train_hist_gray, cv2.HISTCMP_BHATTACHARYYA)
+            ident = train_labels[i].split('_')[0] # id_version_rot.jpg
+            if ident == '0':
+                true_train_labels.append(1) # inlier
+            else:
+                true_train_labels.append(-1) # outlier
 
-                _, img_diff_t = cv2.threshold(img_diff_gray, 50, 1, cv2.THRESH_BINARY)
-                t_value = np.sum(img_diff_t)
-                
-                results.append([
-                    int(ident), 
-                    *hist_corr_rgb, 
-                    hist_corr_gray,
-                    t_value
-                ])
-        results = np.array(results)
-        results[:, -1] /= np.max(results[:, -1])
-        return results
+        test_imgs, test_labels = self._getImagesFromFolder(test_folder)
+        test_histograms = []
+        true_test_labels = []
+        for i, img in enumerate(test_imgs):
+            ident = test_labels[i].split('_')[0] # id_version_rot.jpg
+            if test_ids != None and ident not in test_ids:
+                continue
+            img = plt.imread(img)
+            hist = cv2.calcHist([img], [0, 1, 2], None, bins, ranges)
+            hist = cv2.normalize(hist, hist).flatten()
+            test_histograms.append(hist)
+
+            if ident == '0':
+                true_test_labels.append(1) # inlier
+            else:
+                true_test_labels.append(-1) # outlier
+
+        model.fit(train_histograms)
+
+        train_pred = model.predict(train_histograms)
+        train_error = np.sum(train_pred != true_train_labels)
+        train_acc = 1.0 - train_error / len(train_histograms)
+
+        test_pred = model.predict(test_histograms)
+        test_error = np.sum(test_pred != true_test_labels)
+        test_acc = 1.0 - test_error / len(test_histograms)
+
+        if verbose:
+            print('Train ->', end='')
+            print(f'    Error: {train_error}/{len(train_histograms)} | {train_error / len(train_histograms):.3f}', end='')
+            print(f'    Acuracy: {train_acc:.3f}')
+            print('Test -> ', end='')
+            print(f'    Error: {test_error}/{len(test_histograms)} | {test_error / len(test_histograms):.3f}', end='')
+            print(f'    Acuracy: {test_acc:.3f}')
+        return train_pred, test_pred
     
     def getHomography(self, query_kpts, train_kpts, matches):
         """Returns a homography matrix to transform the train image to match
@@ -309,19 +372,6 @@ class BeerClassification:
             return H
         else:
             return None
-    
-    def predictAndScoreSVM(self, X):
-        true_labels = X[:, -1]
-        X = X[:, :-1]
-        clf = OneClassSVM().fit(X)
-        pred = clf.predict(X)
-        
-        pred_outliers = pred == 1
-        true_outliers = true_labels != 0
-        pred_x_true = pred_outliers == true_outliers
-        
-        acc = np.sum(pred_x_true) / len(pred_x_true)
-        return acc
             
     def predictAndScoreThreshold(self, X):
         idx = 20
