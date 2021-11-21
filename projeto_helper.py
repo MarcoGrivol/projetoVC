@@ -1,17 +1,18 @@
+# Alunos:
+# Luís Felipe Corrêa Ortolan, 759375
+# Marco Antônio Bernardi Grivol, 758619
+
 import cv2
 import sys
 import numpy as np
 from os import listdir
 from os.path import join, isfile
-from numpy.random import triangular
-from sklearn.svm import OneClassSVM
-from sklearn.ensemble import IsolationForest
 import matplotlib.pyplot as plt
 from PIL import Image
 
 class BeerClassification:
     """
-    Helper class for identifying problem in beer labels
+    Helper class for identifying outliers in beer labels
     """
 
     def __init__(
@@ -50,6 +51,45 @@ class BeerClassification:
         edgeThreshold=4, 
         sigma=2.5):
 
+        """Uses SIFT and RANSAC to obtain a transformation for the train_img
+        and returns the difference between both images, does this process for 
+        all the loaded images.
+
+        Parameters
+        ----------
+        query_imgs : ndarray of images
+            Target images to be used as reference for the transformation.
+
+        query_idxs : list of integer
+            Indexes of the query_imgs.
+
+        masks : ndarray of images
+            Masks used with query_imgs
+
+        folder_path : strin, optional
+            Folder path to save the image differences (default is same directory).
+        
+        kernel : tuple, optional
+            Kernel used for GaussianBlur (default is (9, 9)).
+        
+        nfeatures : integer, optional
+            Maximum number of features, check opencv documentation (default is 4000).
+
+        nOctaveLayers : integer, optional
+            Number of layers in each octave, check opencv documentation (default is 6).
+
+        edgeThreshold : integer, optional
+            Threshold to filter out edge-like features, check opencv documentation (default is 4).
+
+        sigma : float, optional
+            Sigma for the Gaussian, check opencv documentation (default is 2.5).
+
+        Returns
+        -------
+        No return;
+        """
+
+        # remove query_imgs to avoid subtraction of the same image
         labels = np.delete(self.labels, query_idxs)
         imgs = np.delete(self.imgs, query_idxs)
         for i, label in enumerate(labels):
@@ -91,12 +131,30 @@ class BeerClassification:
         query_img : ndarray
             Target image to be used as reference for the transformation.
 
+        query_img_mask : ndarray of images
+            Masks used with query_imgs
+
         train_img : ndarray
             Image to be transformed to match the query image.
 
         plot : bool, optional
             If True, uses matplotlib to show each step of the process (default
             is False).
+
+        kernel : tuple, optional
+            Kernel used for GaussianBlur (default is (9, 9)).
+        
+        nfeatures : integer, optional
+            Maximum number of features, check opencv documentation (default is 4000).
+
+        nOctaveLayers : integer, optional
+            Number of layers in each octave, check opencv documentation (default is 6).
+
+        edgeThreshold : integer, optional
+            Threshold to filter out edge-like features, check opencv documentation (default is 4).
+
+        sigma : float, optional
+            Sigma for the Gaussian, check opencv documentation (default is 2.5).
         
         Returns
         -------
@@ -111,15 +169,15 @@ class BeerClassification:
         train_img_s = cv2.GaussianBlur(train_img_t, kernel, cv2.BORDER_DEFAULT)
         
         img_diff = cv2.subtract(train_img_s, query_img_s)
-        img_diff_trim = self.trim(img_diff)
+        img_diff_crop = self.crop(img_diff)
         
         if plot:
             query_kpts = ret[1]
             train_kpts = ret[2]
             matches = ret[3]
             self._plot_imgs(query_img, train_img, query_kpts, train_kpts,
-                            matches, train_img_t, img_diff_trim)
-        return img_diff_trim
+                            matches, train_img_t, img_diff_crop)
+        return img_diff_crop
     
     def transform(
         self, 
@@ -140,6 +198,21 @@ class BeerClassification:
 
         train_img : ndarray
             Image to be transformed to match the query image.
+
+        kernel : tuple, optional
+            Kernel used for GaussianBlur (default is (9, 9)).
+        
+        nfeatures : integer, optional
+            Maximum number of features, check opencv documentation (default is 4000).
+
+        nOctaveLayers : integer, optional
+            Number of layers in each octave, check opencv documentation (default is 6).
+
+        edgeThreshold : integer, optional
+            Threshold to filter out edge-like features, check opencv documentation (default is 4).
+
+        sigma : float, optional
+            Sigma for the Gaussian, check opencv documentation (default is 2.5).
 
         Returns
         -------
@@ -191,27 +264,43 @@ class BeerClassification:
         T=50,
         verbose=True
     ):
-        """Apply a binary threshold to all images using query_img as reference and
-        returns the sum of white pixels from each image.
+        """Apply a binary threshold to all images, sums the white pixel count of
+        each image. Uses the train_folder to fit the model and test_folder to evaluate.
 
         Parameters
         ----------
-        query_img : ndarray
-            Image to be used as reference in the transformation operations.
+        model : sklearn object
+            sklearn classification model. OneClassSVM and IsolationForest are 
+            recommended, but could also use some other as long as it classifies
+            outliers with -1 and inliers with 1 and has the "fit" and "predict"
+            methods.
         
-        query_idx : int
-            The index of the query_img.
+        train_folder : string
+            Path to the folder containing the image differences used for training 
+            the model. Should/Must not contain outliers.
+
+        test_folder : string
+            Path to the folder containing the image differences used for testing
+            the model. May contain outliers.
+
+        test_ids : list of strings, optional
+            Image classes used for testing (default is None, meaning all the images
+            inside the test folder)
 
         threshold_value : int, optional
             Pixel values below this threshold will be black and white otherwise
             (default is 50).
 
+        verbose : bool, optional
+            Print accuracy and error from the train and test stages (default is
+            True).
+
         Returns
         -------
-        results : (N, 2) list
-            Each row contains the index of the image in self.imgs and the sum
-            of white pixels after the threshold operation.
-
+        train_pred, test_pred : (list, list)
+            Returns the train and test predictions respectively.
+            1 for inliers
+            -1 for outliers
         """
 
         train_imgs, train_labels = self._getImagesFromFolder(train_folder)
@@ -280,18 +369,61 @@ class BeerClassification:
         train_folder,
         test_folder,
         test_ids=None,
-        bins=[10, 10, 10],
-        ranges=[10, 100, 10, 100, 10, 100],
+        bins=[10],
+        ranges=[10, 100],
         verbose=True
     ):
+        """Calculates the histogram of the difference image. Uses the train_folder 
+        to fit the model and test_folder to evaluate.
+
+        Parameters
+        ----------
+        model : sklearn object
+            sklearn classification model. OneClassSVM and IsolationForest are 
+            recommended, but could also use some other as long as it classifies
+            outliers with -1 and inliers with 1 and has the "fit" and "predict"
+            methods.
+        
+        train_folder : string
+            Path to the folder containing the image differences used for training 
+            the model. Should/Must not contain outliers.
+
+        test_folder : string
+            Path to the folder containing the image differences used for testing
+            the model. May contain outliers.
+
+        test_ids : list of strings, optional
+            Image classes used for testing (default is None, meaning all the images
+            inside the test folder)
+
+        bins : [integer]
+            Bins to divide the histogram.
+
+        ranges : [min, max]
+            Ranges to consider for the histogram.
+
+        verbose : bool, optional
+            Print accuracy and error from the train and test stages (default is
+            True).
+
+        Returns
+        -------
+        train_pred, test_pred : (list, list)
+            Returns the train and test predictions respectively.
+            1 for inliers
+            -1 for outliers
+        """
 
         train_imgs, train_labels = self._getImagesFromFolder(train_folder)
         train_histograms = []
         true_train_labels = []
         for i, img in enumerate(train_imgs):
             img = plt.imread(img)
-            hist = cv2.calcHist([img], [0, 1, 2], None, bins, ranges)
-            hist = cv2.normalize(hist, hist).flatten()
+            hist = []
+            for channel in range(3):
+                h = cv2.calcHist([img], [channel], None, bins, ranges)
+                h = cv2.normalize(h, h).flatten()
+                hist.extend(h)
             train_histograms.append(hist)
 
             ident = train_labels[i].split('_')[0] # id_version_rot.jpg
@@ -308,8 +440,11 @@ class BeerClassification:
             if test_ids != None and ident not in test_ids:
                 continue
             img = plt.imread(img)
-            hist = cv2.calcHist([img], [0, 1, 2], None, bins, ranges)
-            hist = cv2.normalize(hist, hist).flatten()
+            hist = []
+            for channel in range(3):
+                h = cv2.calcHist([img], [channel], None, bins, ranges)
+                h = cv2.normalize(h, h).flatten()
+                hist.extend(h)
             test_histograms.append(hist)
 
             if ident == '0':
@@ -372,30 +507,21 @@ class BeerClassification:
             return H
         else:
             return None
-            
-    def predictAndScoreThreshold(self, X):
-        idx = 20
-        X_fit = X[:idx, 0]
-        X_test = X[idx:, 0]
-        true_labels = X[idx:, 1]
 
-        inliers_max_value = np.max(X_fit)
-        threshold = inliers_max_value
+    def crop(self, img):
+        """Crops the image to remove rows and columns filled with zeros.
 
-        pred_outliers = []
-        for value in X_test:
-            if value > threshold:
-                pred_outliers.append(True)
-            else:
-                pred_outliers.append(False)
+        Parameters
+        ----------
+        img : ndarray
+            Image with black borders
 
-        true_outliers = true_labels != 0
-        pred_x_true = pred_outliers == true_outliers
-
-        acc = np.sum(pred_x_true) / len(pred_x_true)
-        return (acc, threshold)
-
-    def trim(self, img):
+        Returns
+        -------
+        img_crop : ndarray
+            Cropped image
+        """
+        # finds the first index filled with zeros
         row, col, d = img.shape
         # left
         for i in range(col):
@@ -417,6 +543,22 @@ class BeerClassification:
         return img_crop
     
     def _getImagesFromFolder(self, folder_path):
+        """Should not be called from outside method.
+        Get all the images inside the folder.
+
+        Parameters
+        ----------
+        folder_path : string
+            Path to the folder with images.
+
+        Returns
+        -------
+        (imgs, labels) : tuple
+            imgs : list of strings
+                Path to the image (not the image), use plt.imread(imgs[i]) to read.
+            labels : list of strins
+                Name of each image in the folder.
+        """
         imgs = []
         labels = []
         for file in listdir(folder_path):
@@ -428,6 +570,37 @@ class BeerClassification:
     
     def _plot_imgs(self, query_img, train_img, query_kpts, train_kpts,
                    matches, train_img_t, img_diff):
+        """Should not be called from outside method.
+        Plot the process of image feature detection, matching and image difference
+        with SIFT and RANSAC.
+
+        Parameters
+        ----------
+        query_img : ndarray
+            Reference image.
+
+        train_img : ndarray
+            Image to be transformed to match the query image.
+
+        query_kpts : opencv Keypoints
+            Query image keypoints.
+
+        train_kpts : opencv Keypoints
+            Train image keypoints.
+
+        matches : opencv Matches
+            Keypoint matches.
+
+        train_img_t : ndarray
+            Train image transformed.
+
+        img_diff : ndarray
+            Image obtained from query and train images subtraction.
+
+        Returns
+        -------
+        No return.
+        """
         fig, axs = plt.subplots(5, 2, figsize=(20, 40), constrained_layout=True)
         # draw original images
         axs[0, 0].imshow(query_img)
@@ -465,5 +638,20 @@ class BeerClassification:
         plt.show()
         
     def _saveImage(self, img, path='img.jpg'):
+        """Should not be called from outside method.
+        Saves the image.
+
+        Parameters
+        ----------
+        img : ndarray
+            Image to be saved.
+
+        path : string, optional
+            Path to save the image.
+
+        Returns
+        -------
+        No return
+        """
         img = Image.fromarray(img)
         img.save(path)
